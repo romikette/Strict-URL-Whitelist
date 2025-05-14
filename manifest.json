@@ -2,16 +2,23 @@
   "manifest_version": 3,
   "name": "Strict URL Whitelist",
   "version": "1.0",
-  "permissions": ["storage", "declarativeNetRequest"],
+  "description": "Allow only specific URLs with optional query parameters using high-performance DNR rules.",
+  "permissions": [
+    "declarativeNetRequest",
+    "storage"
+  ],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
-  "declarative_net_request": {
-    "rule_resources": [],
-    "default_rule_group": {
-      "rules": [],
-      "enabled": true
+  "action": {
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
     }
+  },
+  "declarative_net_request": {
+    "rule_resources": []
   }
 }

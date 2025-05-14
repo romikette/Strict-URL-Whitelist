@@ -1,46 +1,71 @@
+// background.js
 const BLOCK_ALL_RULE_ID = 9999;
 
-// Optional logging toggle via chrome.storage.local.debug
-function log(...args) {
-  chrome.storage.local.get("debug", ({ debug }) => {
-    if (debug) console.log("[STRICT-WHITELIST]", ...args);
-  });
+function sanitizePath(path = "") {
+  return path.split("?")[0];
 }
 
-function updateAllowRules(allowedList) {
-  if (!chrome.declarativeNetRequest?.updateDynamicRules) {
-    console.error("declarativeNetRequest API unavailable.");
-    return;
+function buildQueryMatcher(query) {
+  if (!query || typeof query !== "object") return "";
+  return Object.entries(query)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("&");
+}
+
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function generateRules(allowedList) {
+  const rules = [];
+  let idCounter = 1;
+
+  for (const entry of allowedList) {
+    const domain = entry.domain;
+    const path = sanitizePath(entry.path || "");
+    const query = entry.query || null;
+
+    const escapedDomain = escapeRegex(domain);
+    const escapedPath = escapeRegex(path);
+    const queryString = buildQueryMatcher(query);
+
+    if (queryString) {
+      const strictRegex = `^https:\/\/${escapedDomain}\/${escapedPath}.*[?&]${escapeRegex(queryString)}(&.*)?$`;
+
+      rules.push({
+        id: idCounter++,
+        priority: 2,
+        action: { type: "allow" },
+        condition: {
+          regexFilter: strictRegex,
+          resourceTypes: ["main_frame"]
+        }
+      });
+
+      rules.push({
+        id: idCounter++,
+        priority: 1,
+        action: { type: "block" },
+        condition: {
+          urlFilter: `*://${domain}/${path}*`,
+          resourceTypes: ["main_frame"]
+        }
+      });
+    } else {
+      rules.push({
+        id: idCounter++,
+        priority: 2,
+        action: { type: "allow" },
+        condition: {
+          urlFilter: `*://${domain}/${path}*`,
+          resourceTypes: ["main_frame"]
+        }
+      });
+    }
   }
 
-  // Deduplicate and validate
-  const unique = Array.from(
-    new Map(
-      allowedList
-        .filter(({ domain }) => /^[a-z0-9.-]+$/i.test(domain)) // strict domain validation
-        .map(item => [`${item.domain}/${item.path || "*"}`, item])
-    ).values()
-  );
-
-  const allowRules = unique.map((entry, index) => {
-    const { domain, path } = entry;
-
-    const urlFilter = path
-      ? `*://${domain}/${path}`
-      : `*://${domain}/*`;
-
-    return {
-      id: index + 1,
-      priority: 2,
-      action: { type: "allow" },
-      condition: {
-        urlFilter,
-        resourceTypes: ["main_frame"]
-      }
-    };
-  });
-
-  const blockAllRule = {
+  // Global block rule (redirect to blank page)
+  rules.push({
     id: BLOCK_ALL_RULE_ID,
     priority: 1,
     action: {
@@ -51,32 +76,35 @@ function updateAllowRules(allowedList) {
       urlFilter: "*",
       resourceTypes: ["main_frame"]
     }
-  };
+  });
 
-  const ruleIdsToRemove = Array.from({ length: 1000 }, (_, i) => i + 1).concat(BLOCK_ALL_RULE_ID);
+  return rules;
+}
+
+function updateDynamicRules(allowedList) {
+  const rules = generateRules(allowedList);
+  const ruleIds = rules.map(r => r.id);
 
   chrome.declarativeNetRequest.updateDynamicRules({
-    removeRuleIds: ruleIdsToRemove,
-    addRules: [blockAllRule, ...allowRules]
+    removeRuleIds: ruleIds,
+    addRules: rules
   }, () => {
     if (chrome.runtime.lastError) {
-      console.error("Rule update failed:", chrome.runtime.lastError);
+      console.error("Failed to update rules:", chrome.runtime.lastError);
     } else {
-      log("Rules updated:", allowRules);
+      console.log("Rules updated:", rules);
     }
   });
 }
 
-chrome.storage.local.get(["allowedList", "debug"], (data) => {
-  const allowedList = data.allowedList || [];
-  if (typeof data.debug !== "boolean") {
-    chrome.storage.local.set({ debug: false });
-  }
-  updateAllowRules(allowedList);
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.local.get("allowedList", ({ allowedList = [] }) => {
+    updateDynamicRules(allowedList);
+  });
 });
 
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.allowedList) {
-    updateAllowRules(changes.allowedList.newValue);
+    updateDynamicRules(changes.allowedList.newValue);
   }
 });
